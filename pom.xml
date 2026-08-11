@@ -568,13 +568,13 @@
           <suppressionsLocation>config/checkstyle/suppressions.xml</suppressionsLocation>
           <suppressionsFileExpression>checkstyle.suppressions.file</suppressionsFileExpression>
         </configuration>
-    <dependencies>
-        <dependency>
+        <dependencies>
+          <dependency>
             <groupId>com.puppycrawl.tools</groupId>
             <artifactId>checkstyle</artifactId>
             <version>10.18.2</version>
-        </dependency>
-    </dependencies>
+          </dependency>
+        </dependencies>
       </plugin>
       <plugin>
         <groupId>com.diffplug.spotless</groupId>
