@@ -69,3 +69,38 @@ jobs:
             -Dsonar.projectKey="${{ vars.SONAR_PROJECT_KEY }}" \
             -Dsonar.organization="${{ vars.SONAR_ORGANIZATION }}" \
             -Dsonar.host.url="https://sonarcloud.io"
+
+  sca-scan :
+    name: SCA - Dependency Scan
+    needs: sast
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy FS Scan (Dependencies)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1' # Puca ako nađe HIGH ili CRITICAL ranjivosti         
+   
+  docker-build-and-scan:
+    name: Docker Build & Security Scan
+    needs: sca-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker Image
+        run: |
+          docker build -t webgoat:${{ github.sha }} .
+
+      - name: Run Trivy Image Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'webgoat:${{ github.sha }}'
+          format: 'table'
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1' # Puca ako image ima HIGH ili CRITICAL ranjivosti u OS/paketima        
