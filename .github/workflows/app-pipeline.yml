@@ -85,7 +85,9 @@ jobs:
           format: 'table'
           severity: 'HIGH,CRITICAL'
           exit-code: '1' # Puca ako nađe HIGH ili CRITICAL ranjivosti         
-   
+          trivy-ignores: ''
+          args: '--scanners vuln,secret --pkg types os,library'
+
   docker-build-and-scan:
     name: Docker Build & Security Scan
     needs: sca-scan
