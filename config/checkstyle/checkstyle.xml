@@ -233,14 +233,6 @@
             <property name="severity" value="warning"/>
         </module>
         <module name="JavadocMethod">
-            <property name="tokens" value="CLASS_DEF,INTERFACE_DEF,ENUM_DEF,METHOD_DEF,ANNOTATION_FIELD_DEF"/>
-            <property name="scope" value="public"/>
-            <property name="allowMissingParamTags" value="true"/>
-            <property name="allowMissingThrowsTags" value="true"/>
-            <property name="allowMissingReturnTag" value="true"/>
-            <property name="minLineCount" value="2"/>
-            <property name="allowedAnnotations" value="Override, Test"/>
-            <property name="allowThrowsTagsForSubclasses" value="true"/>
             <property name="severity" value="warning"/>
         </module>
         <module name="MethodName">
