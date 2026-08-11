@@ -70,12 +70,22 @@ jobs:
             -Dsonar.organization="${{ vars.SONAR_ORGANIZATION }}" \
             -Dsonar.host.url="https://sonarcloud.io"
 
-  sca-scan :
+  sca-scan:
     name: SCA - Dependency Scan
     needs: sast
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Resolve Maven Dependencies Locally
+        run: ./mvnw dependency:resolve -DskipTests
 
       - name: Run Trivy FS Scan (Dependencies)
         uses: aquasecurity/trivy-action@master
@@ -84,9 +94,9 @@ jobs:
           scan-ref: '.'
           format: 'table'
           severity: 'HIGH,CRITICAL'
-          exit-code: '1' # Puca ako nađe HIGH ili CRITICAL ranjivosti         
+          exit-code: '1'
           trivy-ignores: ''
-          args: '--scanners vuln,secret --pkg types os,library'
+          args: '--offline-scan --scanners vuln,secret'
 
   docker-build-and-scan:
     name: Docker Build & Security Scan
