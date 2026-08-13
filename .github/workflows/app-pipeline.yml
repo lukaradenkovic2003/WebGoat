@@ -95,8 +95,6 @@ jobs:
           format: 'table'
           severity: 'HIGH,CRITICAL'
           exit-code: '1'
-          trivy-ignores: ''
-          args: '--offline-scan --scanners vuln,secret'
 
   docker-build-and-scan:
     name: Docker Build & Security Scan
@@ -104,6 +102,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: webgoat-jar
+          path: target/
 
       - name: Build Docker Image
         run: |
@@ -115,4 +119,4 @@ jobs:
           image-ref: 'webgoat:${{ github.sha }}'
           format: 'table'
           severity: 'HIGH,CRITICAL'
-          exit-code: '1' # Puca ako image ima HIGH ili CRITICAL ranjivosti u OS/paketima        
+          exit-code: '1'    
