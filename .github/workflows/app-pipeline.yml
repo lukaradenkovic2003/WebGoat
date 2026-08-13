@@ -100,6 +100,9 @@ jobs:
     name: Docker Build & Security Scan
     needs: sca-scan
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -110,8 +113,7 @@ jobs:
           path: target/
 
       - name: Build Docker Image
-        run: |
-          docker build -t webgoat:${{ github.sha }} .
+        run: docker build -t webgoat:${{ github.sha }} .
 
       - name: Run Trivy Image Scan
         uses: aquasecurity/trivy-action@master
@@ -119,4 +121,18 @@ jobs:
           image-ref: 'webgoat:${{ github.sha }}'
           format: 'table'
           severity: 'HIGH,CRITICAL'
-          exit-code: '1'    
+          exit-code: '1'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::981207388642:role/github-actions-ecr-push
+          aws-region: us-east-1
+
+      - name: Login to ECR
+        run: aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ secrets.ECR_REPO_URL }}
+
+      - name: Tag and push to ECR
+        run: |
+          docker tag webgoat:${{ github.sha }} ${{ secrets.ECR_REPO_URL }}:${{ github.sha }}
+          docker push ${{ secrets.ECR_REPO_URL }}:${{ github.sha }}    
