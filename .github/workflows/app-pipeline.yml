@@ -135,4 +135,32 @@ jobs:
       - name: Tag and push to ECR
         run: |
           docker tag webgoat:${{ github.sha }} ${{ secrets.ECR_REPO_URL }}:${{ github.sha }}
-          docker push ${{ secrets.ECR_REPO_URL }}:${{ github.sha }}    
+          docker push ${{ secrets.ECR_REPO_URL }}:${{ github.sha }}  
+  
+  update-helm-repo:
+    name: Update Helm Repo Image Tag
+    needs: docker-build-and-scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout helm-repo
+        uses: actions/checkout@v4
+        with:
+          repository: lukaradenkovic2003/webgoat-helm
+          token: ${{ secrets.HELM_REPO_TOKEN }}
+          path: webgoat-helm
+
+      - name: Update image tag in values.yaml
+        run: |
+          cd webgoat-helm
+          sed -i "s/tag: .*/tag: \"${{ github.sha }}\"/" values.yaml
+          cat values.yaml
+
+      - name: Commit and push tag update
+        run: |
+          cd webgoat-helm
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add values.yaml
+          git commit -m "chore: update image tag to ${{ github.sha }}" || echo "No changes to commit"
+          git push        
+            
