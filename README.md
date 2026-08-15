@@ -1,12 +1,3 @@
-# WebGoat: A deliberately insecure Web Application
-
-[![Build](https://github.com/WebGoat/WebGoat/actions/workflows/build.yml/badge.svg?branch=develop)](https://github.com/WebGoat/WebGoat/actions/workflows/build.yml)
-[![java-jdk](https://img.shields.io/badge/java%20jdk-25-green.svg)](https://jdk.java.net/)
-[![OWASP Labs](https://img.shields.io/badge/OWASP-Lab%20project-f7b73c.svg)](https://owasp.org/projects/)
-[![GitHub release](https://img.shields.io/github/release/WebGoat/WebGoat.svg)](https://github.com/WebGoat/WebGoat/releases/latest)
-[![Gitter](https://badges.gitter.im/OWASPWebGoat/community.svg)](https://gitter.im/OWASPWebGoat/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
-[![Discussions](https://img.shields.io/github/discussions/WebGoat/WebGoat)](https://github.com/WebGoat/WebGoat/discussions)
-[![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-%23FE5196?logo=conventionalcommits&logoColor=white)](https://conventionalcommits.org)
 
 # Introduction
 
@@ -30,138 +21,118 @@ first thing that all hackers claim.*
 
 ![WebGoat](docs/images/webgoat.png)
 
-# Installation instructions:
+# WebGoat — App Repo (DevSecOps CI Pipeline)
 
-For more details check [the Contribution guide](/CONTRIBUTING.md)
+This repository holds the application source code (WebGoat — OWASP's deliberately vulnerable Java/Spring Boot application, used as the demo target) and the **Shift-Left Security CI pipeline** that runs every commit through build, static and composition security analysis, builds a Docker image, scans it, and on success automatically updates the image tag in the GitOps (Helm) repository.
 
-## 1. Run using Docker
+Second of the three repositories in the project:
 
-Already have a browser and ZAP and/or Burp installed on your machine in this case you can run the WebGoat image directly using Docker.
+| Repo | Role |
+|---|---|
+| [webgoat-infra](https://github.com/lukaradenkovic2003/webgoat-infra) | AWS infrastructure (Terraform) |
+| **WebGoat** (this repo) | Application code + DevSecOps CI pipeline |
+| [webgoat-helm](https://github.com/lukaradenkovic2003/webgoat-helm) | Helm chart + ArgoCD GitOps + DAST |
 
-Every release is also published on [DockerHub](https://hub.docker.com/r/webgoat/webgoat).
+## Docker image
 
-```shell
-docker run -it -p 127.0.0.1:8080:8080 -p 127.0.0.1:9090:9090 webgoat/webgoat
+The application is packaged on top of the `eclipse-temurin:25-jdk-noble` base image, runs as a non-root user (`webgoat`), exposes ports **8080** (WebGoat) and **9090** (WebWolf), and has a `HEALTHCHECK` defined against `http://localhost:8080/WebGoat/actuator/health`.
+
+## CI/CD Pipeline (`.github/workflows/...`) — "App DevSecOps Pipeline"
+
+Triggers on every push and pull request to `main`. Made up of 5 sequential jobs (each depends on the previous one via `needs:`):
+
+### 1. `build-and-quality` — Build & Quality Check
+- Checkout, set up JDK 25 (Temurin), Maven cache
+- `./mvnw clean package -DskipTests` — build
+- `./mvnw checkstyle:check` — runs but **does not block the pipeline** (`continue-on-error: true`)
+- Uploads the build artifact (`webgoat-*.jar`) for use by later jobs
+
+### 2. `sast` — SAST (SonarCloud)
+- Static code analysis via **SonarCloud** (`sonar-maven-plugin`)
+- Uses `SONAR_TOKEN`, `SONAR_PROJECT_KEY`, `SONAR_ORGANIZATION`
+- The Sonar Quality Gate result is visible on the SonarCloud dashboard; if you want the build to explicitly fail on a failed Quality Gate, add `sonar.qualitygate.wait=true` to the analysis step
+
+### 3. `sca-scan` — SCA (Software Composition Analysis)
+- Resolves Maven dependencies (`mvnw dependency:resolve`)
+- Runs a **Trivy filesystem scan** (`aquasecurity/trivy-action`) against `pom.xml` / the resolved dependency tree — this is classic SCA: it doesn't look at your code, it looks at the third-party libraries your code pulls in
+- `severity: HIGH,CRITICAL` + `exit-code: 1` → **pipeline fails** if a HIGH/CRITICAL vulnerability is found in dependencies
+
+#### Real finding: XStream RCE (CVE-2013-7285)
+
+During development, Trivy's fs scan against `pom.xml` found **23 vulnerabilities**, all traced back to a single dependency: **XStream 1.4.5** (used for XML serialization/deserialization).
+
+- **22 HIGH** + **1 CRITICAL**
+- The critical one — **CVE-2013-7285** — allows **Remote Code Execution** through insecure XML deserialization. It's an old, well-documented vulnerability.
+
+Because `sca-scan` has `severity: HIGH,CRITICAL` + `exit-code: 1`, Trivy's exit code 1 marked the job as **FAILED**, which meant `docker-build-and-scan` (which has `needs: sca-scan`) never ran — the Docker image was never built, let alone pushed to ECR. This is exactly the behavior the task requires: *"if SAST or SCA detect HIGH/CRITICAL vulnerabilities, the pipeline is halted"* and *"code with a critical vulnerability must not reach ECR."*
+
+**Fix:** the vulnerable version was pinned via a property in `pom.xml`:
+
+```xml
+<xstream.version>1.4.5</xstream.version>
 ```
 
-For some lessons you need the container run in the same timezone. For this you can set the TZ environment variable.
-E.g.
+Bumping it to a patched release resolved the CVE (since `${xstream.version}` is referenced in two places in the file, the single property change updated both):
 
-```shell
-docker run -it -p 127.0.0.1:8080:8080 -p 127.0.0.1:9090:9090 -e TZ=America/Boise webgoat/webgoat
+```xml
+<xstream.version>1.4.20</xstream.version>
 ```
 
-If you want to use OWASP ZAP or another proxy, you can no longer use 127.0.0.1 or localhost. but
-you can use custom host entries. For example:
+After the fix, the same scan with the same rules re-ran against the same `pom.xml`, found 0 (or far fewer) HIGH/CRITICAL results, returned exit code 0, and the pipeline proceeded to `docker-build-and-scan`. This before/after pair — a real CRITICAL finding that blocked the build, and a real fix that let it through — is good evidence that the Quality Gate works correctly in both directions: it blocks vulnerable code and doesn't needlessly block clean code, which is exactly what a shift-left security pipeline is for.
 
-```shell
-127.0.0.1 www.webgoat.local www.webwolf.local
+### 4. `docker-build-and-scan` — Docker Build & Image Scan
+- Downloads the jar artifact from the first job, builds the Docker image (`docker build -t webgoat:<sha>`)
+- Runs a **Trivy image scan** against the built image, again `HIGH,CRITICAL` + `exit-code: 1` → pipeline fails on critical vulnerabilities in the image itself
+- AWS authentication goes through **GitHub OIDC** (no static AWS keys) — assumes the `github-actions-ecr-push` IAM role
+- Logs in to ECR and pushes the image tagged with the commit SHA (`${{ github.sha }}`)
+
+### 5. `update-helm-repo` — GitOps Trigger
+- Checks out the `webgoat-helm` repo using `HELM_REPO_TOKEN` (a PAT with write access)
+- Uses `sed` to update `tag:` in `values.yaml` to the new commit SHA
+- Commits and **pushes directly** to `webgoat-helm` (note: this is currently a direct push to the helm repo's `main` branch, not a Pull Request — the task allows either approach; if you want a stricter flow, this step can easily be changed to open a PR instead)
+
+After this step, **ArgoCD** (which watches the `webgoat-helm` repo) automatically detects the tag change and syncs the new version to the EKS cluster — closing the full GitOps loop from an application commit to a live deployment.
+
+## Security Gates — what stops the pipeline
+
+| Check | Tool | Behavior |
+|---|---|---|
+| Code quality | Checkstyle | Non-blocking (informational) |
+| SAST | SonarCloud | Result visible on the dashboard |
+| SCA (dependencies) | Trivy `fs` scan | **Fails the build** on HIGH/CRITICAL |
+| Docker image | Trivy `image` scan | **Fails the build** on HIGH/CRITICAL |
+
+> **Note:** the current pipeline has no explicit Slack notify step in the `WebGoat` repo (unlike `webgoat-infra`, which has one). If the team should get a Slack alert for failed SAST/SCA/Trivy checks too (not just see the build fail in the GitHub Actions UI), add a `curl` call to `SLACK_WEBHOOK_URL` in an `if: failure()` step for each relevant job, following the same pattern used in the `webgoat-infra` pipeline.
+
+## GitHub Secrets & Variables
+
+**Repository secrets:**
+| Secret | Purpose |
+|---|---|
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | (legacy/fallback — the main flow uses the OIDC role) |
+| `ECR_REGISTRY` / `ECR_REPO_URL` | ECR registry address for pushing images |
+| `HELM_REPO_TOKEN` | PAT for pushing to the `webgoat-helm` repo (GitOps trigger) |
+| `SONAR_TOKEN` | Authentication to SonarCloud |
+
+**Repository variables:**
+| Variable | Purpose |
+|---|---|
+| `AWS_DEFAULT_REGION` | `us-east-1` |
+| `SONAR_ORGANIZATION` | SonarCloud organization |
+| `SONAR_PROJECT_KEY` | SonarCloud project key |
+
+## Running locally
+
+```bash
+./mvnw clean package -DskipTests
+java -Dwebgoat.port=8080 -Dwebwolf.port=9090 -jar target/webgoat-*.jar
 ```
 
-Then you can run the container with:
+or via Docker:
 
-```shell
-docker run -it -p 127.0.0.1:8080:8080 -p 127.0.0.1:9090:9090 -e WEBGOAT_HOST=www.webgoat.local -e WEBWOLF_HOST=www.webwolf.local -e TZ=America/Boise webgoat/webgoat
+```bash
+docker build -t webgoat:local .
+docker run -it -p 8080:8080 -p 9090:9090 webgoat:local
 ```
 
-Then visit http://www.webgoat.local:8080/WebGoat/ and http://www.webwolf.local:9090/WebWolf/
-
-## 2. Run using Docker with complete Linux Desktop
-
-Instead of installing tools locally we have a complete Docker image based on running a desktop in your browser. This way you only have to run a Docker image which will give you the best user experience.
-
-```shell
-docker run -p 127.0.0.1:3000:3000 webgoat/webgoat-desktop
-```
-
-## 3. Standalone
-
-Download the latest WebGoat release from [https://github.com/WebGoat/WebGoat/releases](https://github.com/WebGoat/WebGoat/releases)
-
-```shell
-export TZ=Europe/Amsterdam # or your timezone
-java -Dfile.encoding=UTF-8 -jar webgoat-2023.8.jar
-```
-
-Click the link in the log to start WebGoat.
-
-### 3.1 Running on a different port
-
-If for some reason you want to run WebGoat on a different port, you can do so by adding the following parameter:
-
-```shell
-java -jar webgoat-2023.8.jar --webgoat.port=8001 --webwolf.port=8002
-```
-
-For a full overview of all the parameters you can use, please check the [WebGoat properties file](webgoat-container/src/main/resources/application-{webgoat, webwolf}.properties).
-
-## 4. Run from the sources
-
-### Prerequisites:
-
-* Java 25
-* Your favorite IDE
-* Git, or Git support in your IDE
-
-Open a command shell/window:
-
-```Shell
-git clone git@github.com:WebGoat/WebGoat.git
-```
-
-Now let's start by compiling the project.
-
-```Shell
-cd WebGoat
-git checkout <<branch_name>>
-# On Linux/Mac:
-./mvnw clean install
-
-# On Windows:
-./mvnw.cmd clean install
-
-If you have ran WebGoat before, you should first run mvn clean -Pcleanall to clean up files from your temp and home directories which could fail the tests due to changes in lessons!
-
-# Using docker or podman, you can than build the container locally
-docker build -f Dockerfile . -t webgoat/webgoat
-```
-
-Now we are ready to run the project. WebGoat is using Spring Boot.
-
-```Shell
-# On Linux/Mac:
-./mvnw spring-boot:run
-# On Windows:
-./mvnw.cmd spring-boot:run
-
-```
-
-... you should be running WebGoat on http://localhost:8080/WebGoat momentarily.
-
-Note: The above link will redirect you to login page if you are not logged in. LogIn/Create account to proceed.
-
-To change the IP address add the following variable to the `WebGoat/webgoat-container/src/main/resources/application.properties` file:
-
-```
-server.address=x.x.x.x
-```
-
-## 4. Run with custom menu
-
-For specialist only. There is a way to set up WebGoat with a personalized menu. You can leave out some menu categories or individual lessons by setting certain environment variables.
-
-For instance running as a jar on a Linux/macOS it will look like this:
-
-```Shell
-export TZ=Europe/Amsterdam # or your timezone
-export EXCLUDE_CATEGORIES="CLIENT_SIDE,GENERAL,CHALLENGE"
-export EXCLUDE_LESSONS="SqlInjectionAdvanced,SqlInjectionMitigations"
-java -jar target/webgoat-2023.8-SNAPSHOT.jar
-```
-
-Or in a docker run it would (once this version is pushed into docker hub) look like this:
-
-```Shell
-docker run -d -p 127.0.0.1:8080:8080 -p 127.0.0.1:9090:9090 -e EXCLUDE_CATEGORIES="CLIENT_SIDE,GENERAL,CHALLENGE" -e EXCLUDE_LESSONS="SqlInjectionAdvanced,SqlInjectionMitigations" webgoat/webgoat
-```
-
+The application is available at `http://localhost:8080/WebGoat/login`.
